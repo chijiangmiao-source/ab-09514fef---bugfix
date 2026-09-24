@@ -3,6 +3,8 @@
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Worker } from 'node:worker_threads';
+import { hamming, reverseComplement } from '../src/lib/optimizer.js';
+import { buildAcceptanceRows, EXPECTED } from './acceptance-batch.mjs';
 
 const WORKER_URL = new URL('../src/web/worker.js', import.meta.url);
 
@@ -131,5 +133,54 @@ describe('Worker 集成', () => {
     assert.ok(got.some((m) => m.type === 'done' && m.id === 101));
     // 旧任务即便迟到，也绝不允许携带 done
     assert.ok(!got.some((m) => m.type === 'done' && m.id === 100));
+  });
+
+  test('验收批次经 Worker 返回后字段一致（含规范位向量与独立复算）', async () => {
+    const { w, done } = spawnWorker();
+    workers.push(w);
+    const rows = buildAcceptanceRows();
+    w.postMessage({ type: 'audit', id: 7, rows });
+    const msg = await done();
+    assert.equal(msg.type, 'done');
+    assert.equal(msg.id, 7);
+    const r = msg.result;
+
+    // 汇总字段（大整数为十进制字符串）
+    assert.equal(r.totalPriority, EXPECTED.totalPriority.toString());
+    assert.equal(r.optimalCount, EXPECTED.optimalCount.toString());
+    assert.equal(r.selectedCount, EXPECTED.selectedCount);
+    // 逐条归属与规范位向量
+    assert.deepEqual(r.status, [...EXPECTED.status]);
+    assert.equal(r.bitVector, EXPECTED.bitVector);
+    assert.deepEqual(r.selectedIndices, [...EXPECTED.selectedIndices]);
+    assert.equal(r.eligible.length, rows.length); // 本批次无自冲突失格记录
+
+    // 字段间一致性：位向量 ⇔ canonical ⇔ selectedIndices ⇔ selectedCount
+    const canonical = [...r.canonical];
+    assert.equal(r.bitVector, canonical.join(''));
+    assert.equal(canonical.filter(Boolean).length, r.selectedCount);
+    assert.deepEqual(
+      canonical.map((b, i) => (b ? i : -1)).filter((i) => i >= 0),
+      r.selectedIndices,
+    );
+    r.status.forEach((st, i) => {
+      if (st === 'mandatory') assert.equal(canonical[i], 1, `第 ${i + 1} 条必选应在位向量中`);
+      if (st === 'never') assert.equal(canonical[i], 0, `第 ${i + 1} 条从不选不应在位向量中`);
+    });
+
+    // 独立复算：选中记录无互斥、数量 14、优先权之和 19
+    const picked = rows.filter((_, i) => canonical[i] === 1);
+    assert.equal(picked.length, 14);
+    const sum = picked.reduce((acc, row) => acc + BigInt(row.priority), 0n);
+    assert.equal(sum, 19n);
+    assert.equal(sum.toString(), r.totalPriority);
+    for (let a = 0; a < picked.length; a++) {
+      for (let b = a + 1; b < picked.length; b++) {
+        const sa = picked[a].barcode;
+        const sb = picked[b].barcode;
+        const d = Math.min(hamming(sa, sb), hamming(sa, reverseComplement(sb)));
+        assert.ok(d >= 2, `选中记录互斥：${sa} 与 ${sb} 距离 ${d}`);
+      }
+    }
   });
 });

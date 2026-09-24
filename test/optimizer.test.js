@@ -172,11 +172,14 @@ function mulberry(seed) {
 describe('solveGraph 与穷举对拍', () => {
   const cases = [
     { n: 0 }, { n: 1 }, { n: 2 }, { n: 5 }, { n: 10 }, { n: 13 },
+    // n>16 覆盖规范位向量的精确相容性裁决（回归：旧实现此处仅用上下界估计，
+    // 会把不可行位误判为可行，产出与汇总矛盾的非最优“规范”位向量）
+    { n: 17, trials: 14 }, { n: 18, trials: 8 },
   ];
-  for (const { n } of cases) {
+  for (const { n, trials = 40 } of cases) {
     test(`随机图 n=${n}`, async () => {
       const rng = mulberry(1000 + n);
-      for (let t = 0; t < 40; t++) {
+      for (let t = 0; t < trials; t++) {
         const { weights, adj } = randomGraph(n, rng, t % 3 === 0);
         const sol = await solveGraph(weights, adj);
         const ref = bruteSolve(weights, adj);

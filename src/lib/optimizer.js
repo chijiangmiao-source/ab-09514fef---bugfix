@@ -339,43 +339,20 @@ export async function solveGraph(weights, adj, opts = {}) {
   // ---------- 规范位向量：输入次序下“选中优先”的逐位贪心 ----------
   // 按输入次序逐位裁决：某位能取 1（存在与此前裁决相容的最优方案）则取 1，
   // 否则取 0。结果是所有最优位向量中字典序最大者（1 优先的规范代表）。
+  // 相容性判定必须精确：复用上方 MITM 数据——B 侧枚举的独立集 Y 与
+  // A 侧子集 DP 在“自由 A 顶点 \ forb(Y)”内的最优值组合，覆盖全部合法
+  // 独立集；任一组合恰好达到 (bestW, bestS) 即存在相容最优方案。
+  // （合法组合的权不可能超过 bestW，故首次命中即可返回。）
   let forcedIn = 0n;
   let forcedOut = 0n;
   const chosen = new Uint8Array(n);
+  const fullBBig = (1n << BigInt(n2)) - 1n;
 
   async function existsOptimal() {
-    if (n <= 16) {
-      const limit = 1 << n;
-      for (let mask = 0; mask < limit; mask++) {
-        const candidate = BigInt(mask);
-        if ((candidate & forcedIn) !== forcedIn || (candidate & forcedOut) !== 0n) continue;
-        let w = 0n;
-        let s = 0;
-        let bits = mask;
-        let valid = true;
-        while (bits) {
-          const v = 31 - Math.clz32(bits);
-          const bit = 1 << v;
-          if ((adj[v] & candidate) !== 0n) {
-            valid = false;
-            break;
-          }
-          w += BigInt(weights[v]);
-          s++;
-          bits ^= bit;
-        }
-        if (valid && w === bestW && s === bestS) return true;
-        if ((mask & 0xffff) === 0xffff) {
-          if (tick) await tick();
-          if (shouldCancel()) throw new AuditCanceled();
-        }
-      }
-      return false;
-    }
-
-    let blocked = 0n;
+    // 强制选中集合必须自身独立；其权/数构成已锁定的下界
     let lowerW = 0n;
     let lowerS = 0;
+    let blocked = 0n;
     let selected = forcedIn;
     while (selected) {
       const v = selected.toString(2).length - 1;
@@ -388,19 +365,23 @@ export async function solveGraph(weights, adj, opts = {}) {
     }
     if (lowerW > bestW || lowerS > bestS) return false;
 
-    let upperW = lowerW;
-    let upperS = lowerS;
-    for (let v = 0; v < n; v++) {
-      const bit = 1n << BigInt(v);
-      if ((forcedIn & bit) !== 0n || (forcedOut & bit) !== 0n || (blocked & bit) !== 0n) continue;
-      upperW += BigInt(weights[v]);
-      upperS++;
-      if ((v & 0x3f) === 0x3f) {
+    // 自由顶点：未被强制选中/排除、且不与强制选中者相邻
+    const banned = forcedIn | forcedOut | blocked;
+    const freeA = fullA & ~Number(banned & fullABig);
+    const bannedB = Number((banned >> BigInt(n1)) & fullBBig);
+    const targetW = bestW - lowerW;
+    const targetS = bestS - lowerS;
+
+    for (let k = 0; k < K; k++) {
+      if ((k & 0xffff) === 0) {
         if (tick) await tick();
         if (shouldCancel()) throw new AuditCanceled();
       }
+      if ((yMask[k] & bannedB) !== 0) continue;
+      const m = freeA & ~yForb[k];
+      if (yW[k] + gW[m] === targetW && yS[k] + gS[m] === targetS) return true;
     }
-    return upperW >= bestW && upperS >= bestS;
+    return false;
   }
 
   for (let v = 0; v < n; v++) {
