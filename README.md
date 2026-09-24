@@ -53,6 +53,6 @@ src/lib/optimizer.js   核心算法（序列工具、校验、建图、MITM 精�
 src/lib/protocol.js    Worker 消息协议与陈旧消息判定
 src/web/               页面（index.html / styles.css / ui.js / worker.js）
 src/server/server.js   零依赖静态服务器（含 /healthz）
-test/                  单元 + 穷举对拍 + Worker 集成测试
+test/                  单元 + 穷举对拍 + Worker 集成 + 17 条批次验收测试
 scripts/verify.mjs     一次性核验流水线
 ```

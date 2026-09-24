@@ -172,11 +172,14 @@ function mulberry(seed) {
 describe('solveGraph 与穷举对拍', () => {
   const cases = [
     { n: 0 }, { n: 1 }, { n: 2 }, { n: 5 }, { n: 10 }, { n: 13 },
+    // n=17 越过小规模穷举裁决分支，覆盖 MITM 精确可行性裁决路径
+    // （该路径曾误用松弛上界，导致规范位向量与汇总互相矛盾）
+    { n: 17, reps: 24 },
   ];
-  for (const { n } of cases) {
+  for (const { n, reps = 40 } of cases) {
     test(`随机图 n=${n}`, async () => {
       const rng = mulberry(1000 + n);
-      for (let t = 0; t < 40; t++) {
+      for (let t = 0; t < reps; t++) {
         const { weights, adj } = randomGraph(n, rng, t % 3 === 0);
         const sol = await solveGraph(weights, adj);
         const ref = bruteSolve(weights, adj);
@@ -272,7 +275,7 @@ describe('auditRecords 与记录级穷举对拍', () => {
     const rng = mulberry(20260923);
     const alpha = 'ACGT';
     for (let t = 0; t < 120; t++) {
-      const n = 10 + Math.floor(rng() * 7); // 10..16
+      const n = 10 + Math.floor(rng() * 8); // 10..17（17 走 MITM 精确裁决路径）
       const L = 6 + Math.floor(rng() * 4);  // 6..9
       const used = new Set();
       const seqs = [];

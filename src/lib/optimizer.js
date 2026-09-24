@@ -343,64 +343,59 @@ export async function solveGraph(weights, adj, opts = {}) {
   let forcedOut = 0n;
   const chosen = new Uint8Array(n);
 
+  // 精确可行性裁决：forcedIn 必选 / forcedOut 必弃的前缀下是否仍存在
+  // 双层最优方案。必须做精确判定，不能用“未决顶点全取”的松弛上界代替：
+  // 上界达标不代表存在可达最优值的方案，会把无法与后续位相容的选择误判
+  // 为可行（表现为位向量与总优先权/入选数自相矛盾）。
+  // 复用前文的 A 侧子集 DP（gW/gS）与 B 侧全部独立集枚举：对每个 B 独立
+  // 集 Y，令 F = forcedIn∩A，A 侧须包含 F、避开 Y 的封锁与 forcedOut，
+  // 其余顶点只能取自 t = m \\ F \\ N_A(F)，A 侧最优值为 w(F) + g[t]。
   async function existsOptimal() {
-    if (n <= 16) {
-      const limit = 1 << n;
-      for (let mask = 0; mask < limit; mask++) {
-        const candidate = BigInt(mask);
-        if ((candidate & forcedIn) !== forcedIn || (candidate & forcedOut) !== 0n) continue;
-        let w = 0n;
-        let s = 0;
-        let bits = mask;
-        let valid = true;
-        while (bits) {
-          const v = 31 - Math.clz32(bits);
-          const bit = 1 << v;
-          if ((adj[v] & candidate) !== 0n) {
-            valid = false;
-            break;
-          }
-          w += BigInt(weights[v]);
-          s++;
-          bits ^= bit;
-        }
-        if (valid && w === bestW && s === bestS) return true;
-        if ((mask & 0xffff) === 0xffff) {
-          if (tick) await tick();
-          if (shouldCancel()) throw new AuditCanceled();
-        }
-      }
-      return false;
-    }
+    const fA = forcedIn & fullABig;
+    const oA = Number(forcedOut & fullABig);
+    const fB = Number(forcedIn >> BigInt(n1));
+    const oB = Number(forcedOut >> BigInt(n1));
 
-    let blocked = 0n;
-    let lowerW = 0n;
-    let lowerS = 0;
-    let selected = forcedIn;
-    while (selected) {
-      const v = selected.toString(2).length - 1;
+    // F∩A 的内部冲突、A 内邻居并集、权值与数量
+    let nFA = 0;
+    let wFA = 0n;
+    let cFA = 0;
+    let bits = fA;
+    while (bits) {
+      const v = bits.toString(2).length - 1;
       const bit = 1n << BigInt(v);
-      if ((adj[v] & forcedIn) !== 0n) return false; // 强制选中集合内部冲突
-      blocked |= adj[v];
-      lowerW += BigInt(weights[v]);
-      lowerS++;
-      selected ^= bit;
+      if (adj[v] & fA) return false;
+      nFA |= na[v];
+      wFA += wA[v];
+      cFA++;
+      bits ^= bit;
     }
-    if (lowerW > bestW || lowerS > bestS) return false;
+    // F∩B 的内部冲突（跨侧冲突在下方按 Y 的封锁掩码判定）
+    bits = BigInt(fB);
+    while (bits) {
+      const u = bits.toString(2).length - 1;
+      if (nb[u] & fB) return false;
+      bits ^= 1n << BigInt(u);
+    }
+    const fANum = Number(fA);
 
-    let upperW = lowerW;
-    let upperS = lowerS;
-    for (let v = 0; v < n; v++) {
-      const bit = 1n << BigInt(v);
-      if ((forcedIn & bit) !== 0n || (forcedOut & bit) !== 0n || (blocked & bit) !== 0n) continue;
-      upperW += BigInt(weights[v]);
-      upperS++;
-      if ((v & 0x3f) === 0x3f) {
+    for (let k = 0; k < K; k++) {
+      if ((k & 0xffff) === 0) {
         if (tick) await tick();
         if (shouldCancel()) throw new AuditCanceled();
       }
+      const Y = yMask[k];
+      if ((Y & fB) !== fB || (Y & oB) !== 0) continue;
+      const forb = yForb[k];
+      if (forb & fANum) continue; // F∩A 与 Y 跨侧冲突
+      const m = fullA & ~forb & ~oA;
+      if ((m & fANum) !== fANum) continue;
+      const t = m & ~fANum & ~nFA;
+      if (yW[k] + wFA + gW[t] !== bestW) continue;
+      if (yS[k] + cFA + gS[t] !== bestS) continue;
+      return true;
     }
-    return upperW >= bestW && upperS >= bestS;
+    return false;
   }
 
   for (let v = 0; v < n; v++) {
